@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Doctor Registration Test</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    .info-box {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 { color: #2c3e50; }
+    h2 { color: #34495e; margin-top: 0; }
+    .feature { 
+      padding: 10px;
+      margin: 10px 0;
+      background: #e8f5e9;
+      border-left: 4px solid #4caf50;
+      border-radius: 4px;
+    }
+    .note {
+      background: #fff3cd;
+      border-left: 4px solid #ffc107;
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 4px;
+    }
+    code {
+      background: #f4f4f4;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: monospace;
+    }
+    .btn {
+      display: inline-block;
+      padding: 12px 24px;
+      background: #3498db;
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      margin: 10px 5px;
+    }
+    .btn:hover { background: #2980b9; }
+    .btn-success { background: #27ae60; }
+    .btn-success:hover { background: #229954; }
+  </style>
+</head>
+<body>
+  <h1>✅ Doctor Certificate & Digital Signature Feature Implemented</h1>
+  
+  <div class="info-box">
+    <h2>🎯 What's New</h2>
+    <div class="feature">
+      ✓ <strong>Doctor Registration:</strong> Doctors can now upload their medical certificate/degree during registration
+    </div>
+    <div class="feature">
+      ✓ <strong>Digital Signature:</strong> Doctors can upload their signature image for prescriptions
+    </div>
+    <div class="feature">
+      ✓ <strong>License Number:</strong> Doctors can add their medical license number
+    </div>
+    <div class="feature">
+      ✓ <strong>Qualifications:</strong> Doctors can specify their qualifications (MBBS, MD, etc.)
+    </div>
+    <div class="feature">
+      ✓ <strong>Patient View:</strong> Patients can see doctor details including certificates
+    </div>
+    <div class="feature">
+      ✓ <strong>Prescription Signature:</strong> Digital signatures are automatically added to prescription PDFs
+    </div>
+  </div>
+
+  <div class="info-box">
+    <h2>📝 Database Changes</h2>
+    <p>The following fields have been added to the <code>users</code> table:</p>
+    <ul>
+      <li><code>license_number</code> - Medical license number</li>
+      <li><code>qualification</code> - Educational qualifications</li>
+      <li><code>certificate_path</code> - Path to uploaded certificate image</li>
+      <li><code>signature_path</code> - Path to uploaded signature image</li>
+    </ul>
+  </div>
+
+  <div class="info-box">
+    <h2>🔧 How to Use</h2>
+    <h3>For Doctors:</h3>
+    <ol>
+      <li>Go to the registration page</li>
+      <li>Select role as "Doctor"</li>
+      <li>Fill in all required information including:
+        <ul>
+          <li>Medical License Number</li>
+          <li>Qualification (e.g., MBBS, MD)</li>
+          <li>Upload your medical certificate/degree (Max 5MB)</li>
+          <li>Upload your signature image (Max 2MB)</li>
+        </ul>
+      </li>
+      <li>Complete registration</li>
+    </ol>
+
+    <h3>For Patients:</h3>
+    <ol>
+      <li>View your appointments on the patient dashboard</li>
+      <li>See complete doctor details including:
+        <ul>
+          <li>Doctor's qualifications</li>
+          <li>License number</li>
+          <li>Contact information (email, phone)</li>
+          <li>Link to view their certificate</li>
+        </ul>
+      </li>
+      <li>Download prescriptions with doctor's digital signature</li>
+    </ol>
+  </div>
+
+  <div class="info-box">
+    <h2>📂 File Structure</h2>
+    <p>Uploaded files are stored in:</p>
+    <ul>
+      <li><code>static/uploads/certificates/</code> - Medical certificates</li>
+      <li><code>static/uploads/signatures/</code> - Digital signatures</li>
+    </ul>
+  </div>
+
+  <div class="note">
+    <strong>⚠️ Note:</strong> Make sure to test the file upload functionality with actual image files. 
+    Supported formats for certificates: images and PDFs. Signatures: images only.
+  </div>
+
+  <div style="text-align: center; margin-top: 30px;">
+    <a href="/register" class="btn btn-success">Try Doctor Registration</a>
+    <a href="/login" class="btn">Go to Login</a>
+  </div>
+
+  <div class="info-box">
+    <h2>🧪 Testing Checklist</h2>
+    <ul style="list-style: none; padding-left: 0;">
+      <li>☐ Test doctor registration with certificate upload</li>
+      <li>☐ Test doctor registration with signature upload</li>
+      <li>☐ Verify files are saved in correct directories</li>
+      <li>☐ Check patient dashboard shows doctor details</li>
+      <li>☐ Verify certificate link opens the uploaded file</li>
+      <li>☐ Create a prescription and verify signature appears in PDF</li>
+      <li>☐ Test with different image formats (JPG, PNG)</li>
+      <li>☐ Test file size limits (5MB for certificates, 2MB for signatures)</li>
+    </ul>
+  </div>
+
+</body>
+</html>
