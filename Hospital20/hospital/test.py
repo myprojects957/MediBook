@@ -72,7 +72,7 @@ except ImportError:
     requests = None
 
 try:
-    from hospital.gen_pdf import generate_prescription
+    from gen_pdf import generate_prescription
     REPORTLAB_AVAILABLE = True
 except Exception:
     REPORTLAB_AVAILABLE = False
@@ -85,6 +85,13 @@ from apscheduler.executors.pool import ThreadPoolExecutor
 
 
 app = Flask(__name__)
+
+app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), 'static', 'uploads')
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  
+
+
+os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'certificates'), exist_ok=True)
+os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'signatures'), exist_ok=True)
 
 scheduler = BackgroundScheduler(
     jobstores={
@@ -160,17 +167,41 @@ if MAIL_AVAILABLE:
 else:
     mail = None
 
+def is_valid_email(email):
+    """Basic email validation"""
+    if not email or '@' not in email:
+        return False
+    import re
+    # Basic email validation - at least one char before @, domain with dot, and TLD
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]+$'
+    return re.match(pattern, email) is not None
+
 def send_email(to, subject, body):
     if not MAIL_AVAILABLE or not mail or not to:
+        print(f"Email not sent: MAIL_AVAILABLE={MAIL_AVAILABLE}, mail={mail is not None}, to={to}")
         return False
+
+    if not app.config.get("MAIL_USERNAME") or not app.config.get("MAIL_PASSWORD"):
+        print("Email not sent: MAIL_USERNAME/MAIL_PASSWORD not configured")
+        return False
+    
+    # Validate email format
+    if not is_valid_email(to):
+        print(f"Invalid email format: {to}")
+        return False
+        
     try:
         msg = Message(subject, recipients=[to])
         msg.body = body
         mail.send(msg)
+        print(f"Email sent successfully to {to}")
         return True
-    except Exception:
+    except Exception as e:
+        print(f"Email send error to {to}: {type(e).__name__} - {str(e)}")
         return False
 
+
+# Twilio SMS sender
 def send_sms(phone: str, message: str) -> bool:
     try:
         if requests is None:
@@ -256,17 +287,21 @@ SEED_SQL = [
 
 @app.route("/init_db")
 def init_db():
-  
+    # Run your seed SQL if any
     for query, data in SEED_SQL:
         try:
             q(query, data, many=True, commit=True)
         except Exception as e:
             print(f"Seed insert skipped: {e}")
+
+    # Delete old admin users (optional, if you want a clean reset)
     try:
         q("DELETE FROM users WHERE role='admin'", commit=True)
         print("Old admin users deleted successfully.")
     except Exception as e:
         print(f"Error deleting old admins: {e}")
+
+    # Check if admin already exists
     user = q(
         "SELECT id FROM users WHERE email=%s LIMIT 1",
         ("PankajaChavan@1965.com",),
@@ -291,6 +326,11 @@ def init_db():
     return redirect(url_for("login"))
 
 def schedule_appointment_reminders(appointment_id):
+    # Warn if email is not configured
+    if not MAIL_AVAILABLE or not mail:
+        print("WARNING: Email system not configured. Reminders will be scheduled but emails won't send.")
+        print("Please configure MAIL_USERNAME and MAIL_PASSWORD in .env file")
+    
     try:
         appt = q("""
                  SELECT a.*, d.name as doctor_name, p.id as patient_id, 
@@ -321,59 +361,75 @@ def schedule_appointment_reminders(appointment_id):
         now = datetime.now()
         
         def send_appointment_reminder(appointment_data, reminder_type):
+            try:
+                if not appointment_data.get('reminders_enabled'):
+                    print(f"Reminders disabled for patient {appointment_data['patient_id']}")
+                    return
 
-            if not appointment_data.get('reminders_enabled'):
-                print(f"Reminders disabled for patient {appointment_data['patient_id']}")
-                return
+                print("\n=== Appointment Reminder Debug ===")
+                print(f"Processing reminder for appointment {appointment_data['id']}")
+                print(f"Reminder type: {reminder_type}")
+                print(f"Patient: {appointment_data['patient_name']}")
+                print(f"Doctor: Dr. {appointment_data['doctor_name']}")
+                print(f"Appointment time: {appointment_data['formatted_time']}")
+                print(f"Patient email: {appointment_data['patient_email']}")
+                notification_data = {
+                    'title': 'Appointment Reminder',
+                    'message': (f"Your appointment with Dr. {appointment_data['doctor_name']} "
+                              f"is {'in 2 hours' if reminder_type == '2hour' else 'in 30 minutes'} "
+                              f"at {appointment_data['formatted_time']}"),
+                    'appointment_id': appointment_data['id']
+                }
+                print("\nPrepared browser notification:")
+                print(f"Title: {notification_data['title']}")
+                print(f"Message: {notification_data['message']}")
+                print("=== End Reminder Debug ===\n")
+                
+                # Email
+                if appointment_data.get('patient_email'):
+                    email_body = (
+                        f"Hi {appointment_data['patient_name']},\n\n"
+                        f"This is a reminder that your appointment with Dr. {appointment_data['doctor_name']} "
+                        f"is scheduled {'in 2 hours' if reminder_type == '2hour' else 'in 30 minutes'} "
+                        f"at {appointment_data['formatted_time']} on {appointment_data['formatted_date']}.\n\n"
+                        "Please arrive a few minutes early."
+                    )
+                    if send_email(appointment_data['patient_email'], "Appointment Reminder", email_body):
+                        print("Reminder email sent successfully")
+                    else:
+                        print("Reminder email failed - check logs above")
 
-            print("\n=== Appointment Reminder Debug ===")
-            print(f"Processing reminder for appointment {appointment_data['id']}")
-            print(f"Reminder type: {reminder_type}")
-            print(f"Patient: {appointment_data['patient_name']}")
-            print(f"Doctor: Dr. {appointment_data['doctor_name']}")
-            print(f"Appointment time: {appointment_data['formatted_time']}")
-            print(f"Patient email: {appointment_data['patient_email']}")
-            notification_data = {
-                'title': 'Appointment Reminder',
-                'message': (f"Your appointment with Dr. {appointment_data['doctor_name']} "
-                          f"is {'in 2 hours' if reminder_type == '2hour' else 'in 30 minutes'} "
-                          f"at {appointment_data['formatted_time']}"),
-                'appointment_id': appointment_data['id']
-            }
-            print("\nPrepared browser notification:")
-            print(f"Title: {notification_data['title']}")
-            print(f"Message: {notification_data['message']}")
-            print("=== End Reminder Debug ===\n")
-           
-            if appointment_data.get('patient_email'):
-                email_body = (
-                    f"Hi {appointment_data['patient_name']},\n\n"
-                    f"This is a reminder that your appointment with Dr. {appointment_data['doctor_name']} "
-                    f"is scheduled {'in 2 hours' if reminder_type == '2hour' else 'in 30 minutes'} "
-                    f"at {appointment_data['formatted_time']} on {appointment_data['formatted_date']}.\n\n"
-                    "Please arrive a few minutes early."
-                )
-                if send_email(appointment_data['patient_email'], "Appointment Reminder", email_body):
-                    print("Reminder email sent")
-                else:
-                    print("Reminder email failed")
+                # SMS (optional)
+                if appointment_data.get('patient_phone'):
+                    sms_msg = (
+                        f"Reminder: Appt with Dr. {appointment_data['doctor_name']} "
+                        f"{'in 2h' if reminder_type == '2hour' else 'in 30m'} at {appointment_data['formatted_time']}"
+                    )
+                    if send_sms(appointment_data['patient_phone'], sms_msg):
+                        print("Reminder SMS sent successfully")
+                    else:
+                        print("Reminder SMS failed or not configured")
 
-            if appointment_data.get('patient_phone'):
-                sms_msg = (
-                    f"Reminder: Appt with Dr. {appointment_data['doctor_name']} "
-                    f"{'in 2h' if reminder_type == '2hour' else 'in 30m'} at {appointment_data['formatted_time']}"
-                )
-                if send_sms(appointment_data['patient_phone'], sms_msg):
-                    print("Reminder SMS sent")
-                else:
-                    print("Reminder SMS failed or not configured")
-
-            print(f"Browser notification prepared: {notification_data}")
-            return notification_data
+                print(f"Browser notification prepared: {notification_data}")
+                return notification_data
+            except Exception as e:
+                print(f"ERROR in send_appointment_reminder: {type(e).__name__} - {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return None
         
         print(f"Current time: {now}")
         print(f"2-hour reminder time: {reminder_2hr}")
         print(f"30-min reminder time: {reminder_30min}")
+        
+        # Remove existing jobs for this appointment to prevent duplicates
+        for job_suffix in ['2hr', '30min']:
+            job_id = f'reminder_{job_suffix}_{appointment_id}'
+            try:
+                scheduler.remove_job(job_id)
+                print(f"Removed existing job: {job_id}")
+            except:
+                pass  # Job doesn't exist, which is fine
         
         if reminder_2hr > now:
             print(f"Scheduling 2-hour reminder for appointment {appointment_id}")
@@ -385,8 +441,11 @@ def schedule_appointment_reminders(appointment_id):
                     'appointment_data': appt,
                     'reminder_type': '2hour'
                 },
-                id=f'reminder_2hr_{appointment_id}'
+                id=f'reminder_2hr_{appointment_id}',
+                replace_existing=True
             )
+        else:
+            print(f"Skipping 2-hour reminder (time has passed)")
             
         if reminder_30min > now:
             print(f"Scheduling 30-minute reminder for appointment {appointment_id}")
@@ -398,8 +457,11 @@ def schedule_appointment_reminders(appointment_id):
                     'appointment_data': appt,
                     'reminder_type': '30min'
                 },
-                id=f'reminder_30min_{appointment_id}'
+                id=f'reminder_30min_{appointment_id}',
+                replace_existing=True
             )
+        else:
+            print(f"Skipping 30-minute reminder (time has passed)")
             
     except Exception as e:
         print(f"Error scheduling reminders: {str(e)}")
@@ -462,37 +524,66 @@ def start_scheduler():
         if scheduler and scheduler.running:
             print("Scheduler already running")
             return
-            
+        
         print(f"Attempting to start scheduler with URL: {db_url}")
-        scheduler.start(paused=True)  
+        scheduler.start(paused=True)
+        
         try:
+            # Try to get jobs, but remove any that can't be restored
             scheduler._jobstores['default'].get_due_jobs(now=datetime.now())
-            scheduler.resume()  
+            scheduler.resume()
             print("Scheduler started successfully")
         except Exception as db_err:
-            print(f"Scheduler database error: {db_err}")
-            scheduler.shutdown()
-            scheduler = None  
+            print(f"Scheduler database warning: {db_err}")
+            # Still resume scheduler even if some jobs failed to load
+            try:
+                scheduler.resume()
+                print("Scheduler started (some old jobs skipped)")
+            except:
+                scheduler.shutdown()
+                scheduler = None
             
     except Exception as e:
         print(f"Error starting scheduler: {str(e)}")
-        scheduler = None 
+        scheduler = None
 
-start_scheduler()
+# Don't call start_scheduler here - will be called later after all functions are defined
 
 @app.route("/")
 def home():
     return redirect(url_for("login"))
+
+@app.route("/feature-info")
+def feature_info():
+    """Display information about the new doctor certificate feature"""
+    return render_template("feature_info.html")
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         email = request.form["email"].strip().lower()
         password = request.form["password"]
+
+        # 1️⃣ Check user exists locally
         user = q("SELECT * FROM users WHERE email=%s", (email,), fetchone=True)
-        if not user or not check_password_hash(user["password_hash"], password):
+        if not user:
             flash("Invalid credentials")
             return render_template("login.html")
+
+        # 2️⃣ Special handling for ADMIN: Skip password verification
+        if user["role"] == "admin":
+            # Admin login - no password verification needed
+            session["user"] = user
+            log_action(user["role"], user["id"], "login")
+            flash("Admin logged in successfully")
+            return redirect(url_for("dashboard_admin_view"))
+
+        # 3️⃣ For non-admin users: Verify password
+        if not check_password_hash(user["password_hash"], password):
+            flash("Invalid credentials")
+            return render_template("login.html")
+
+        # 4️⃣ Verify email using Supabase (for patients and doctors)
         try:
             sb_auth = supabase.auth.sign_in_with_password({
                 "email": email,
@@ -502,21 +593,24 @@ def login():
             flash("Email not verified. Please check your inbox 📧")
             return render_template("login.html")
 
+        # 5️⃣ Block unverified emails
         if not sb_auth.user.email_confirmed_at:
             flash("Please verify your email before login 📩")
             return render_template("login.html")
+
+        # 6️⃣ Mark email verified locally (only once)
         if not user.get("email_verified"):
             q(
                 "UPDATE users SET email_verified=1 WHERE id=%s",
                 (user["id"],),
                 commit=True
             )
+
+        # 7️⃣ Login success
         session["user"] = user
         log_action(user["role"], user["id"], "login")
 
-        if user["role"] == "admin":
-            return redirect(url_for("dashboard_admin_view"))
-        elif user["role"] == "doctor":
+        if user["role"] == "doctor":
             return redirect(url_for("dashboard_doctor_view"))
         else:
             return redirect(url_for("dashboard_patient_view"))
@@ -540,37 +634,97 @@ def register():
         name = request.form["name"]
         email = request.form["email"].lower()
         password = request.form["password"]
+        phone = request.form.get("phone")
         department_raw = request.form.get("department_id")
         department_id = int(department_raw) if department_raw else None
 
         fee_raw = request.form.get("fee")
         fee = float(fee_raw) if fee_raw else 0
-        redirect_url = request.url_root.rstrip('/') + url_for('auth_callback')
-        result = supabase.auth.sign_up({
-            "email": email,
-            "password": password,
-            "options": {
-                "email_redirect_to": redirect_url
-            }
-        })
+        
+        # Doctor-specific fields
+        license_number = request.form.get("license_number")
+        qualification = request.form.get("qualification")
+        
+        certificate_path = None
+        signature_path = None
+        
+        # Handle file uploads for doctors
+        if role == "doctor":
+            # Handle certificate upload
+            if 'certificate' in request.files:
+                cert_file = request.files['certificate']
+                if cert_file and cert_file.filename:
+                    from werkzeug.utils import secure_filename
+                    filename = secure_filename(cert_file.filename)
+                    # Add timestamp to avoid conflicts
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    cert_filename = f"{timestamp}_{filename}"
+                    cert_path = os.path.join(app.config['UPLOAD_FOLDER'], 'certificates', cert_filename)
+                    cert_file.save(cert_path)
+                    certificate_path = f"uploads/certificates/{cert_filename}"
+            
+            # Handle signature upload
+            if 'signature' in request.files:
+                sig_file = request.files['signature']
+                if sig_file and sig_file.filename:
+                    from werkzeug.utils import secure_filename
+                    filename = secure_filename(sig_file.filename)
+                    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    sig_filename = f"{timestamp}_{filename}"
+                    sig_path = os.path.join(app.config['UPLOAD_FOLDER'], 'signatures', sig_filename)
+                    sig_file.save(sig_path)
+                    signature_path = f"uploads/signatures/{sig_filename}"
 
-        if result.user is None:
-            flash("Registration failed. Try again.")
+        # Try Supabase signup (with fallback for network errors)
+        supabase_success = False
+        try:
+            redirect_url = request.url_root.rstrip('/') + url_for('auth_callback')
+            result = supabase.auth.sign_up({
+                "email": email,
+                "password": password,
+                "options": {
+                    "email_redirect_to": redirect_url
+                }
+            })
+            
+            if result.user:
+                supabase_success = True
+        except Exception as e:
+            print(f"Supabase signup failed (will use local-only): {str(e)}")
+            # Continue with local registration even if Supabase fails
+
+        # Store user locally
+        try:
+            q("""
+                INSERT INTO users (role, name, email, password_hash, phone, department_id, fee, 
+                                 license_number, qualification, certificate_path, signature_path, email_verified)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (
+                role,
+                name,
+                email,
+                generate_password_hash(password),
+                phone,
+                department_id,
+                fee,
+                license_number,
+                qualification,
+                certificate_path,
+                signature_path,
+                1 if not supabase_success else 0  # Auto-verify if Supabase unavailable
+            ), commit=True)
+            
+            if supabase_success:
+                flash("Verification email sent. Please check your inbox 📧")
+            else:
+                flash("Registration successful! You can now login. ✅")
+            
+            return redirect(url_for("login"))
+            
+        except Exception as e:
+            print(f"Database error during registration: {str(e)}")
+            flash("Registration failed. Email may already be registered.")
             return redirect(url_for("register"))
-        q("""
-            INSERT INTO users (role, name, email, password_hash, department_id, fee, email_verified)
-            VALUES (%s,%s,%s,%s,%s,%s,0)
-        """, (
-            role,
-            name,
-            email,
-            generate_password_hash(password),
-            department_id,
-            fee
-        ), commit=True)
-
-        flash("Verification email sent. Please check your inbox 📧")
-        return redirect(url_for("login"))
 
     departments = q("SELECT * FROM departments")
     return render_template("register.html", departments=departments)
@@ -579,16 +733,21 @@ def register():
 def auth_callback():
     """Handle Supabase email verification callback"""
     try:
+        # Get the token from URL parameters
         access_token = request.args.get('access_token')
         refresh_token = request.args.get('refresh_token')
         
         if access_token:
+            # Set the session with the tokens
             supabase.auth.set_session(access_token, refresh_token)
+            
+            # Get user info
             user_response = supabase.auth.get_user(access_token)
             
             if user_response and user_response.user:
                 email = user_response.user.email
-            
+                
+                # Update local database to mark email as verified
                 q("UPDATE users SET email_verified=1 WHERE email=%s", (email,), commit=True)
                 
                 flash("✅ Email verified successfully! You can now login.")
@@ -630,7 +789,8 @@ def dashboard_patient_view():
     cur = q("""
         SELECT a.*, d.name AS doctor_name, dp.name AS department_name,
                (SELECT id FROM prescriptions p WHERE p.appointment_id=a.id LIMIT 1) AS prescription_id,
-               u.fee, a.telemedicine
+               u.fee, a.telemedicine,
+               d.qualification, d.license_number, d.certificate_path, d.email as doctor_email, d.phone as doctor_phone
         FROM appointments a
         JOIN users d ON d.id=a.doctor_id
         LEFT JOIN departments dp ON dp.id=d.department_id
@@ -665,14 +825,22 @@ def cleanup_old_cancelled():
     except Exception as e:
         print("Cleanup error:", e)
 
-if scheduler:
-    scheduler.add_job(
-        cleanup_old_cancelled,
-        trigger="cron",
-        hour=2,  
-        id="cleanup_cancelled_jobs",
-        replace_existing=True
-    )
+# Start scheduler first
+start_scheduler()
+
+# Add cleanup job after scheduler is started
+if scheduler and scheduler.running:
+    try:
+        scheduler.add_job(
+            cleanup_old_cancelled,
+            trigger="cron",
+            hour=2,   # runs at 2 AM daily
+            id="cleanup_cancelled_jobs",
+            replace_existing=True
+        )
+        print("Cleanup job scheduled successfully")
+    except Exception as e:
+        print(f"Failed to schedule cleanup job: {e}")
 
 @app.route("/book", methods=["GET","POST"])
 @login_required
@@ -702,7 +870,7 @@ def book():
             })
 
             doctor = q(
-                "SELECT department_id FROM users WHERE id=%s AND role='doctor'",
+                "SELECT department_id, name FROM users WHERE id=%s AND role='doctor'",
                 (doc_id,), fetchone=True
             )
             if not doctor or not doctor['department_id']:
@@ -731,6 +899,20 @@ def book():
                 print(f"Reminders scheduled for appointment {appointment_id}")
             except Exception as e:
                 print(f"Error scheduling reminders: {e}")
+
+            # Send booking confirmation email
+            doctor_name = doctor.get("name") if doctor else ""
+            patient_email = session.get("user", {}).get("email")
+            if patient_email:
+                email_body = (
+                    f"Hi {session['user']['name']},\n\n"
+                    f"Your appointment with Dr. {doctor_name} is booked for {date} at {time}.\n\n"
+                    "Please arrive a few minutes early."
+                )
+                if send_email(patient_email, "Appointment Confirmation", email_body):
+                    print("Confirmation email sent successfully")
+                else:
+                    print("Failed to send confirmation email")
 
             flash("Appointment booked successfully")
             return redirect(url_for("dashboard_patient_view"))
@@ -1049,7 +1231,7 @@ def prescription_form(appointment_id):
         pdf_path = None
         try:
             if REPORTLAB_AVAILABLE:
-                from hospital.gen_pdf import generate_prescription
+                from gen_pdf import generate_prescription
                 print("Generating prescription PDF using reportlab...")
                 prescriptions_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'prescriptions')
                 if not os.path.exists(prescriptions_dir):
@@ -1057,13 +1239,22 @@ def prescription_form(appointment_id):
                 
                 pdf_path = os.path.join(prescriptions_dir, f"prescription_{pres_id}.pdf")
                 print(f"PDF will be saved to: {pdf_path}")
+                
+                # Get doctor's signature and license info
+                doctor_info = q("SELECT signature_path, license_number FROM users WHERE id=%s", (did,), fetchone=True)
+                signature_full_path = None
+                if doctor_info and doctor_info.get('signature_path'):
+                    signature_full_path = os.path.join(os.path.dirname(__file__), "static", doctor_info['signature_path'])
+                
                 success = generate_prescription(
                     pres_id=pres_id,
                     patient_name=ap['patient_name'],
                     doctor_name=ap['doctor_name'],
                     diagnosis=diagnosis,
                     medicines=medicines,
-                    output_path=pdf_path
+                    output_path=pdf_path,
+                    signature_path=signature_full_path,
+                    license_number=doctor_info.get('license_number') if doctor_info else None
                 )
                 
                 if not success:
@@ -1143,7 +1334,7 @@ def dashboard_admin_view():
     """).fetchall()
 
     cancelled = q("""
-        SELECT a.id, p.name AS patient_name, d.name AS doctor_name,
+        SELECT a.id, p.name AS patient_name, d.name AS doctor_name, d.id AS doctor_id,
                a.appointment_date, a.appointment_time, a.cancelled_at
         FROM appointments a
         JOIN users p ON p.id=a.patient_id
@@ -1444,7 +1635,7 @@ def get_doctors(dept_id):
 
 
 from flask import send_file, flash, redirect, url_for
-from hospital.gen_pdf import generate_prescription
+from gen_pdf import generate_prescription
 import os
 
 @app.route('/download_prescription/<int:pres_id>', methods=['GET'])
@@ -1485,13 +1676,46 @@ def contact_doctor(doctor_id):
     if not doctor:
         flash("Doctor not found.")
         return redirect(url_for("dashboard_patient_view"))
+    
+    # Pass both name and phone number to template
     return render_template(
         "contact_doctor.html",
         doctor_name=doctor["name"],
         doctor_phone=doctor.get("phone")
     )
 
+@app.route("/doctor/<int:doctor_id>")
+@login_required
+@role_required("patient", "admin")
+def doctor_details(doctor_id):
+    doctor = q("""
+        SELECT u.id, u.name, u.email, u.phone, u.qualification, u.license_number,
+               u.certificate_path, u.signature_path, u.fee, dpt.name AS department_name
+        FROM users u
+        LEFT JOIN departments dpt ON dpt.id = u.department_id
+        WHERE u.id=%s AND u.role='doctor'
+    """, (doctor_id,), fetchone=True)
+
+    if not doctor:
+        flash("Doctor not found.")
+        role = session.get("user", {}).get("role")
+        if role == "admin":
+            return redirect(url_for("dashboard_admin_view"))
+        return redirect(url_for("dashboard_patient_view"))
+
+    cert_path = doctor.get("certificate_path")
+    signature_path = doctor.get("signature_path")
+    certificate_url = url_for("static", filename=cert_path) if cert_path else None
+    signature_url = url_for("static", filename=signature_path) if signature_path else None
+    certificate_is_pdf = cert_path.lower().endswith(".pdf") if cert_path else False
+
+    return render_template(
+        "doctor_details.html",
+        doctor=doctor,
+        certificate_url=certificate_url,
+        certificate_is_pdf=certificate_is_pdf,
+        signature_url=signature_url
+    )
+
 if __name__ == "__main__":
     app.run(debug=True)
-
-
